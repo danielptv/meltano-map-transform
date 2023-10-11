@@ -9,7 +9,12 @@ from singer_sdk.helpers._util import utc_now
 from singer_sdk.mapper import PluginMapper
 from singer_sdk.mapper_base import InlineMapper
 
-from meltano_map_transform.countries import COUNTRIES_DE, COUNTRIES_EN, COUNTRIES_FR, COUNTRY_CODES
+from meltano_map_transform.countries import (
+    COUNTRIES_DE,
+    COUNTRIES_EN,
+    COUNTRIES_FR,
+    COUNTRY_CODES,
+)
 from case_insensitive_dict import CaseInsensitiveDict
 
 if TYPE_CHECKING:
@@ -25,11 +30,18 @@ class StreamTransform(InlineMapper):
         th.Property(
             "country_map",
             th.ObjectType(
-                th.Property("country_key", th.StringType(), required=True),
-                th.Property("set_country_code", th.StringType(), required=False),
-                th.Property("on_null", th.StringType(), required=False),
-                th.Property("custom_mappings", th.ObjectType(), required=False),
+                additional_properties=th.CustomType(
+                    {
+                        "type": ["object", "null"],
+                        "properties": {
+                            "country_key": {"type": ["string"]},
+                            "set_country_code": {"type": ["string", "null"]},
+                            "custom_mappings": {"type": ["object", "null"]},
+                        },
+                    }
+                )
             ),
+            required=False,
         ),
         th.Property(
             "stream_maps",
@@ -142,14 +154,15 @@ class StreamTransform(InlineMapper):
         stream_id: str = message_dict["stream"]
         for stream_map in self.mapper.stream_maps[stream_id]:
             mapped_record = stream_map.transform(message_dict["record"])
-            if "country_map" in self.config:
+            if (
+                "country_map" in self.config
+                and message_dict["stream"] in self.config["country_map"]
+            ):
                 mapped_record = self.map_country(
-                    message_dict["record"], mapped_record, self.config["country_map"]
+                    message_dict["record"],
+                    mapped_record,
+                    self.config["country_map"][message_dict["stream"]],
                 )
-            # self.logger.info(f"MAP: {stream_map}")
-            # self.logger.info(f"CONFIG: {self._config}")
-            # self.logger.info(f"UNMAPPED_RECORD: {message_dict['record']}")
-            # self.logger.info(f"MAPPED_RECORD: {mapped_record}")
             if mapped_record is not None:
                 yield singer.RecordMessage(
                     stream=stream_map.stream_alias,
@@ -161,15 +174,26 @@ class StreamTransform(InlineMapper):
     def map_country(
         self, message_dict: dict, mapped_dict: dict, country_map_config: dict
     ) -> dict:
+        """Map a record's country name according to config."""
         initial_country_name = message_dict[country_map_config["country_key"]].strip()
         if "custom_mappings" in country_map_config:
-            custom_mappings_dict = CaseInsensitiveDict[str,str](data=country_map_config["custom_mappings"])
-            country_name = custom_mappings_dict.get(initial_country_name, initial_country_name)
-            country_code = COUNTRIES_EN.get(country_name, COUNTRIES_DE.get(country_name, COUNTRIES_FR.get(country_name, "")))
+            custom_mappings_dict = CaseInsensitiveDict[str, str](
+                data=country_map_config["custom_mappings"]
+            )
+            country_name = custom_mappings_dict.get(
+                initial_country_name, initial_country_name
+            )
+            country_code = COUNTRIES_EN.get(
+                country_name,
+                COUNTRIES_DE.get(country_name, COUNTRIES_FR.get(country_name, "")),
+            )
             country_name = COUNTRY_CODES.get(country_code, initial_country_name)
         else:
             country_name = initial_country_name
-            country_code = COUNTRIES_EN.get(country_name, COUNTRIES_DE.get(country_name, COUNTRIES_FR.get(country_name, "")))
+            country_code = COUNTRIES_EN.get(
+                country_name,
+                COUNTRIES_DE.get(country_name, COUNTRIES_FR.get(country_name, "")),
+            )
             country_name = COUNTRY_CODES.get(country_code, initial_country_name)
         if country_code == "":
             self.logger.info("Could not map country: country=%s", country_name)
@@ -177,7 +201,7 @@ class StreamTransform(InlineMapper):
         mapped_dict[country_map_config["country_key"]] = country_name
         if "set_country_code" in country_map_config:
             mapped_dict[country_map_config["set_country_code"]] = country_code
-            
+
         return mapped_dict
 
     def map_state_message(self, message_dict: dict) -> list[singer.Message]:
