@@ -1,4 +1,4 @@
-"""Country mappings."""
+"""Country mappings. Source: https://github.com/geobase/countries/blob/master/countries/countries.json"""
 from case_insensitive_dict import CaseInsensitiveDict
 
 COUNTRY_CODES = {
