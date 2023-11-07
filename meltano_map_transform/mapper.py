@@ -15,7 +15,6 @@ from meltano_map_transform.countries import (
     COUNTRIES_FR,
     COUNTRY_CODES,
 )
-from case_insensitive_dict import CaseInsensitiveDict
 
 if TYPE_CHECKING:
     from pathlib import PurePath
@@ -34,9 +33,8 @@ class StreamTransform(InlineMapper):
                     {
                         "type": ["object", "null"],
                         "properties": {
-                            "country_key": {"type": ["string"]},
-                            "set_country_code": {"type": ["string", "null"]},
-                            "custom_mappings": {"type": ["object", "null"]},
+                            "country_name": {"type": "string"},
+                            "country_code": {"type": "string"},
                         },
                     }
                 )
@@ -155,11 +153,11 @@ class StreamTransform(InlineMapper):
         for stream_map in self.mapper.stream_maps[stream_id]:
             mapped_record = stream_map.transform(message_dict["record"])
             if (
-                "country_map" in self.config
+                mapped_record is not None
+                and "country_map" in self.config
                 and message_dict["stream"] in self.config["country_map"]
             ):
                 mapped_record = self.map_country(
-                    message_dict["record"],
                     mapped_record,
                     self.config["country_map"][message_dict["stream"]],
                 )
@@ -171,37 +169,32 @@ class StreamTransform(InlineMapper):
                     time_extracted=utc_now(),
                 )
 
-    def map_country(
-        self, message_dict: dict, mapped_dict: dict, country_map_config: dict
-    ) -> dict:
+    def map_country(self, mapped_dict: dict, country_map_config: dict) -> dict:
         """Map a record's country name according to config."""
-        initial_country_name = message_dict[country_map_config["country_key"]].strip()
-        if "custom_mappings" in country_map_config:
-            custom_mappings_dict = CaseInsensitiveDict[str, str](
-                data=country_map_config["custom_mappings"]
-            )
-            country_name = custom_mappings_dict.get(
-                initial_country_name, initial_country_name
-            )
+        initial_country_name = mapped_dict.get(
+            country_map_config.get("country_name", ""), ""
+        ).strip()
+        if not mapped_dict[country_map_config["country_code"]].isspace():
+            country_code = mapped_dict[country_map_config["country_code"]]
+            country_name = COUNTRY_CODES.get(country_code, initial_country_name)
             country_code = COUNTRIES_EN.get(
                 country_name,
                 COUNTRIES_DE.get(country_name, COUNTRIES_FR.get(country_name, "")),
             )
-            country_name = COUNTRY_CODES.get(country_code, initial_country_name)
-        else:
+            if country_name == "":
+                self.logger.info("Could not map country: country=%s", country_code)
+        elif not mapped_dict[country_map_config["country_name"]].isspace():
             country_name = initial_country_name
             country_code = COUNTRIES_EN.get(
                 country_name,
                 COUNTRIES_DE.get(country_name, COUNTRIES_FR.get(country_name, "")),
             )
             country_name = COUNTRY_CODES.get(country_code, initial_country_name)
-        if country_code == "":
-            self.logger.info("Could not map country: country=%s", country_name)
+            if country_code == "":
+                self.logger.info("Could not map country: country=%s", country_name)
 
-        mapped_dict[country_map_config["country_key"]] = country_name
-        if "set_country_code" in country_map_config:
-            mapped_dict[country_map_config["set_country_code"]] = country_code
-
+        mapped_dict[country_map_config["country_name"]] = country_name
+        mapped_dict[country_map_config["country_code"]] = country_code
         return mapped_dict
 
     def map_state_message(self, message_dict: dict) -> list[singer.Message]:
